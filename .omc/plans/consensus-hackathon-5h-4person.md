@@ -69,9 +69,7 @@ P1 데모 시나리오: 로컬 FE 에서 학습 개념 1개 입력 → 백엔드
 ## Implementation Steps
 
 ### Phase 0 (Pre-hackathon, 사전 30분) - **Hard-gate**
-- **PoC G0 (필수, 0:00 직전 30분)**: wasmJs target 에서 `ktor-client` SSE 또는 fetch streaming reader 중 어느 쪽이 동작하는지 확인. 미동작 시 NDJSON 폴백 채택. 결과를 `docs/wasm-streaming-decision.md` 1줄 기록.
-  - 통과 기준: wasmJs 콘솔에 라인 1건 emit 확인.
-  - **미통과 시**: BE `/cycle` 응답을 NDJSON (`application/x-ndjson`) 로 즉시 전환. FE 는 fetch streaming reader 로 라인 단위 파싱. Owner: FE (Phase 0 안에), BE 는 Phase 2 시작 전 통보 받음.
+- **PoC G0 (5분 sanity check)**: wasmJs target 에서 `window.fetch()` + `ReadableStream.getReader()` 가 동작하는지 1줄 확인. **FE 에서 ktor-client 의존성 제거 결정** (v4 변경) → 모던 브라우저의 fetch + ReadableStream 은 동작 보장됨, 별도 EventSource 의존 없음. 결과를 `docs/wasm-streaming-decision.md` 1줄 기록 (선택).
 - 4인 환경 사전 확인: JDK 21+, Gradle 8.x, Node.js 20+, `ANTHROPIC_API_KEY` 환경변수 발급/공유.
 - repo 의 `main` / `develop` 브랜치 생성 + `main` branch protection (direct push 차단). 미수행 시 Phase 1 첫 5분에 즉시 처리.
 
@@ -114,7 +112,7 @@ P1 데모 시나리오: 로컬 FE 에서 학습 개념 1개 입력 → 백엔드
 
 **FE (`feature/fe-*`):**
 1. `feature/fe-form` (0:45-1:15): `ConceptInputScreen.kt` (개념 입력 + "시작" 버튼). BE skeleton 의 `/health` 호출만으로 우선 동작 확인.
-2. `feature/fe-stream` (1:15-2:30): `CycleClient.kt` (ktor-client wasmJs SSE 또는 fetch streaming - Phase 0 결정 따름). `StreamingScreen.kt` (Markdown 청크 누적 렌더). **CMP Markdown 라이브러리 미존재 시** 텍스트 청크 누적 + 코드블록/h1 정규식 처리만.
+2. `feature/fe-stream` (1:15-2:30): `CycleClient.kt` 는 **`window.fetch()` + `ReadableStream.getReader()` 직접 사용** (ktor-client 미사용). 응답 body 를 UTF-8 디코딩 + 라인 단위 파싱 + `kotlinx.serialization` 으로 `SseEvent` 디코딩. `StreamingScreen.kt` (Markdown 청크 누적 렌더). **CMP Markdown 라이브러리 미존재 시** 텍스트 청크 누적 + 코드블록/h1 정규식 처리만.
 3. `feature/fe-answers` (2:30-3:15): `AnswerScreen.kt` (확인질문 텍스트박스 그리드 + 제출 → `POST /cycle/answers`).
 4. `feature/fe-viewmodel` (3:15-3:30): `CycleViewModel.kt` (화면 전이 input → streaming → answer).
 
@@ -215,10 +213,8 @@ main (protected, demo cut only)
 - 트리거: Wasm 빌드 깨짐 / CMP Markdown 호환
 - 조치: BE 의 `GET /cycle/debug` HTML 페이지 (서버사이드 단일 페이지) 로 시연.
 
-### 폴백 3: wasmJs SSE 미동작 (NDJSON 폴백)
-- 트리거: ktor-client wasm engine 의 EventSource 미동작
-- 조치: BE 응답 헤더 `Accept: application/x-ndjson` 분기 + FE fetch streaming reader 로 라인 처리.
-- **Owner: FE (Phase 0 PoC G0 에서 사전 검증, 미통과 시 즉시 적용)**.
+### 폴백 3: (v4 에서 제거) fetch + ReadableStream 단일 경로 채택
+- v3 까지의 NDJSON 폴백은 ktor-client wasm SSE 미성숙 risk 의 대응책이었음. v4 에서 ktor-client 제거 + fetch/ReadableStream 직접 사용으로 변경 → 폴백 분기 자체가 사라짐. BE 는 `text/event-stream` 단일 응답만 유지하면 됨.
 
 ### 폴백 4: 시연 인터넷 끊김
 - 4:30 까지 노트북 핫스팟 1대 준비. fixture 모드로 오프라인 시연.
@@ -232,7 +228,7 @@ main (protected, demo cut only)
 | Shared 계약 0:45 까지 미완 | 중 → 낮 | 치명적 | 범위 3종 hard-cut. v2 항목은 1:30-1:45 budget 으로 사전 분리. |
 | Anthropic API 라이브 실패 | 중 | 치명적 | FakeClaudeClient 인터페이스 통일. 429 분기 ErrorEvent. |
 | CMP Wasm Markdown 미지원 | 중 | 중 | 텍스트 청크 + 정규식 처리 폴백. |
-| wasmJs SSE engine 미성숙 | 중 | 큼 | **Phase 0 PoC G0 hard-gate. NDJSON 폴백 owner=FE 명시**. |
+| ~~wasmJs SSE engine 미성숙~~ (v4 해소) | 매우 낮 | 낮 | v4 에서 ktor-client 제거. `window.fetch()` + `ReadableStream` 직접 사용 → 모던 브라우저 동작 보장. |
 | FE-BE 의존성 lock | 중 | 큼 | 양쪽 모두 fixture/stub 으로 단독 테스트 가능. |
 | 단일 머저 병목 (~80분 누적) | 중 | 큼 | **머지 큐 ≥ 2 시 FE 자동 백업 머저 hard rule (0:45 이후)**. |
 | develop 충돌 다발 | 중 | 중 | 수평 레이어 + Shared resolve 우선. |
@@ -247,7 +243,7 @@ main (protected, demo cut only)
 ## Verification Steps
 
 ### 0:00 (Pre-hackathon)
-- [ ] **PoC G0 통과** (wasmJs streaming 결정 + `docs/wasm-streaming-decision.md`)
+- [ ] **PoC G0 sanity check** (wasmJs `window.fetch()` + `ReadableStream` 동작 1줄 확인, 선택)
 - [ ] main branch protection 설정
 - [ ] 4인 환경 셋업 완료
 
@@ -347,4 +343,14 @@ main (protected, demo cut only)
     - Critic Minor 2 / Architect NB1: v2 budget 미사용 회수 정책 (1:45 시 머지 큐 + FE 답변 화면 흡수).
     - Critic Minor 3: FakeClaudeClient 단위 테스트가 동일 emitter path 통과 검증 (shape drift 감지).
 
-> **최종 상태: pending approval (consensus 완료, 사용자 실행 승인 대기)**
+- **v4 (2026-05-21)**: 스택 단순화 - FE 에서 ktor-client 제거.
+  - **변경 사유**: PoC G0 의 진짜 risk 는 ktor-client wasm engine 의 EventSource 미성숙. FE 의 HTTP/SSE 호출이 단일 endpoint 2개뿐인 P1 범위에선 `window.fetch()` + `ReadableStream.getReader()` 직접 사용이 더 단순하고 안전.
+  - **변경 사항:**
+    - Phase 0 PoC G0 hard-gate → 5분 sanity check (선택)
+    - FE `CycleClient.kt` 구현: ktor-client → `window.fetch()` + `ReadableStream`
+    - 폴백 3 (NDJSON) 제거: 단일 `text/event-stream` 경로
+    - Risk 표 "wasmJs SSE engine 미성숙" 항목 해소 (매우낮/낮)
+    - Verification 의 PoC G0 통과 → sanity check
+  - **유지**: BE 의 Ktor 서버는 그대로 (jvm 환경은 안정적, Anthropic SDK jvm 친화).
+
+> **최종 상태: pending approval (v4 스택 단순화, 실행 승인 대기)**
